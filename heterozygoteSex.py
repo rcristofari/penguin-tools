@@ -5,6 +5,7 @@ parser.add_argument('--geno', help='Basename of the input files (VCFtools option
 parser.add_argument('--out', help='Basename of the output files', default="Same as input prefix")
 parser.add_argument('--wSize', help='Size of the SNP blocks used to compute heterozygosity [50]', default="50")
 parser.add_argument('--wStep', help='Step between the SNP blocks [=wSize, non-overlapping]', default=None)
+parser.add_argument('--minSNPs', help='Minimum number of SNPs to process the scaffold [10]', default=10)
 parser.add_argument('--alpha', help='p-value cutoff for bi-modality assignment [.001]', default=.001)
 parser.add_argument('--sexes', help='Optional - A tab-separated files with sample names and sex assignments (homogametic / heterogametic)', default=None)
 parser.add_argument('--chrom', help='Optional - Restrict processing to this chromosome / scaffold', default=None)
@@ -14,37 +15,59 @@ parser.add_argument('--verbose', action='store_true', help="Display all runtime 
 args = parser.parse_args()
 
 # Required libraries
-import matplotlib.pyplot as plt
+import os, math
 import pandas as pd
 import numpy as np
 import numpy.ma as ma
+from collections import Counter
 from sklearn.cluster import KMeans
 from scipy.stats import norm
 from scipy.stats.distributions import chi2
 
+if args.doPlot:
+    import matplotlib.pyplot as plt
+
+###########################################################
+## REMOVE THIS LATER AND CATCH THE SPECIFIC WARNING !!!!  #
+import warnings                                           #
+warnings.filterwarnings("ignore")                         #
+###########################################################
+
 #########################################
 # Load the individual and position files
+print("-------------------------------------------------")
+print("Loading SNP metadata from " + os.path.abspath(args.geno + ".012.pos"))
 posdf = pd.read_csv(args.geno + ".012.pos", delimiter = "\t", header=None, names=("chrom", "pos"))
 ind = [x for x in pd.read_csv(args.geno + ".012.indv", delimiter = "\t", header=None)[0]]
 nPos = posdf.shape[0]
 nInd = len(ind)
+print("Read " + str(posdf.shape[0]) + " positions")
+print("-------------------------------------------------")
 
+#########################################
 # We extract the list of available scaffolds:
-scaffolds = [x for x in sorted(set(posdf["chrom"]))]
+nSNPs = Counter(posdf["chrom"])
+scaffolds = sorted([s for s in nSNPs if nSNPs[s] > int(args.minSNPs)])
+
 
 #########################################
 # Set the window size and step:
 wSize = int(args.wSize)
 if not args.wStep:
     wStep = int(args.wSize)
+else:
+    wStep = args.wStep
 
 #########################################
 # Load the genotype file:
+print("Loading genotypes from " + os.path.abspath(args.geno + ".012"))
 genoList = []
 with open(args.geno + ".012") as ifile:
     for line in ifile:
         genoList.append([int(x) for x in line.strip("\n").split("\t")])
 geno = np.array(genoList)
+print("Read " + str(geno.shape[1]) + " genotypes for " + str(geno.shape[0]) + " samples")
+print("-------------------------------------------------")
 
 #########################################
 # Load the gff file:
@@ -57,20 +80,40 @@ else:
 #########################################
 # Load the sex assignment file:
 if args.sexes:
+    print("Using prior sex assignments:")
+    print("+-----------------------------------------------+")
     sexes = pd.read_csv(args.sexes, delimiter="\t", header=None, names=("ind", "sex"))
     sexes = dict(zip(sexes["ind"], sexes["sex"]))
     sexAssign = [0 if sexes[x] == "homogametic" else 1 for x in ind]
+    maxStrLen = max([len(l) for l in sexes]) + 4
+    for s in sexes:
+        paddedStr = s + "."*(maxStrLen - len(s))
+        print("| " + paddedStr + sexes[s] + "\t|")
+    print("+-----------------------------------------------+")
+
 else:
     sexes, sexAssign = None, None
+    print("No prior sex assignment.")
 
 #########################################
 # A function to distinguish uni- vs bi-modal distributions using K-means clustering and a likelihood ratio test
 def k2_lrt(dat, init_="k-means++", alpha=float(args.alpha)):
     # init_ is a vector of 0 and 1, describing the a priori groups for initialisation
-
     # Perform K=2 clustering:
     dat = np.array(dat)
+    dat = ma.array(dat, mask=[np.isnan(dat)])
+
+    # Keep indices before removing masked values:
+    idx = [x for x in range(len(dat))]
+    maidx = ma.array(idx, mask=ma.getmask(dat))
+    maidx = maidx[~maidx.mask]  # we keep the idx of unmasked values
+
+    # Remove masked values:
+    dat = np.array(dat[~dat.mask])
     dat = dat.reshape(-1, 1)
+
+    # Prepare the assignment list:
+    assign = np.full([len(idx)], np.nan)
 
     # Parse the initialisation parameters
     if type(init_) is list and len(init_) == len(dat):
@@ -104,26 +147,31 @@ def k2_lrt(dat, init_="k-means++", alpha=float(args.alpha)):
     # Likelihood-ratio test:
     lnL_2 = lnL_2_0 + lnL_2_1
     LRT = - 2 * (lnL_1 - lnL_2)
-    pval = chi2.sf(LRT, 2 + len(dat))
-    # Degrees of freedom: I consider the base model has 1 df (the mean)
+    pval = chi2.sf(LRT, 1 + len(dat))
 
-    # If we declare the test significant:
+    if len(dat_0) == 1 or len(dat_1) == 1:  # A one-sample cluster makes no sense (it has no variance)
+        pval = 1
+
     if pval <= alpha:
         isBimodal = 1
         # We polarise the clusters: 0 for low het, 1 for high het
         if mu_2_0 >= mu_2_1:
-            assign = [1 if x == 0 else 0 for x in kmeans.labels_]
+            assignList = [1 if x == 0 else 0 for x in kmeans.labels_]
         else:
-            assign = [x for x in kmeans.labels_]
+            assignList = [x for x in kmeans.labels_]
+
     else:
         isBimodal = 0
-        assign = [0] * dat.shape[0]
+        assignList = [0] * len(maidx)
+
+    for i, j in enumerate(maidx):
+        assign[j] = assignList[i]
 
     return ([assign, pval, isBimodal])
 
 #########################################
 # Compute heterozygosity on blocks of SNPs:
-def windowHet(geno, posdf, scaf, wSize=50, wStep=None):
+def windowHet_v0(geno, posdf, scaf, wSize=50, wStep=None):
 
     if not wStep:
         wStep = wSize
@@ -136,10 +184,10 @@ def windowHet(geno, posdf, scaf, wSize=50, wStep=None):
     these_geno[these_geno == 2] = 0
 
     nGeno = these_geno.shape[1]
-    nWindows = ((nGeno - wSize) // wStep) + 2
+    print(nGeno)
+    nWindows = math.ceil((nGeno - wSize) / wStep) + 1
 
     these_means = np.full([nInd, nWindows], np.nan)
-    wCenter = []
     wCenterPos = []
     start = 0
     stop = wSize
@@ -147,9 +195,85 @@ def windowHet(geno, posdf, scaf, wSize=50, wStep=None):
 
     while stop <= (nGeno + wStep):
         wData = these_geno[:, start:stop]
+
+        # per-SNP reference allele frequency:
         masked = ma.array(wData, mask=[wData == -1])
-        these_means[:, w] = masked.mean(axis=1)
-        wCenter.append(np.mean([start, stop]))
+
+        nChroms, nRef = [], []
+        for x in range(masked.shape[1]):
+            nChroms.append(2 * masked[:, x].count(axis=0))
+            nRef.append(np.where(masked[:, x] == 0)[0].shape[0] * 2 + np.where(masked[:, x] == 1)[0].shape[0])
+        raf = np.array([2 * x * (1 - x) for x in [nRef[i] / c for i, c in enumerate(nChroms)]])
+
+        # Fold homozygotes:
+        masked[masked == 2] = 0
+
+        # Compute adjusted heterozygosity taking into account missing sites:
+        F = []
+        for h in range(masked.shape[0]):
+            this_het = masked[h, :]
+            this_raf = ma.array(raf, mask=ma.getmask(this_het))
+            F.append(1 - (this_het.mean() / this_raf.mean()))
+        these_means[:, w] = ma.array(F, mask=[F is np.nan])
+
+        if stop >= nGeno:
+            realStop = nGeno - 1
+        else:
+            realStop = stop
+        wCenterPos.append(np.mean([these_pos[start], these_pos[realStop]]))
+
+        start += wStep
+        stop += wStep
+        w += 1
+    return ([these_means, wCenterPos])
+
+
+def windowHet(geno, posdf, scaf, wSize=50, wStep=None):
+    if not wStep:
+        wStep = wSize
+
+    these_idx = [x for x in posdf.loc[posdf["chrom"] == scaf].index]
+    these_pos = np.array([x for x in posdf["pos"].loc[these_idx]])
+    these_geno = geno[:, these_idx]
+
+    nGeno = these_geno.shape[1]
+
+    nWindows = math.ceil((nGeno - wSize) / wStep) + 1
+
+    these_means = ma.empty([nInd, nWindows])
+    wCenter = []
+    wCenterPos = []
+    start = 0
+    stop = wSize
+    w = 0
+
+    #while start <= (nGeno - wSize):
+    while stop < (nGeno + wStep):
+        wData = these_geno[:, start:stop]
+
+        # per-SNP reference allele frequency:
+        masked = ma.array(wData, mask=[wData == -1])
+
+        nChroms, nRef = [], []
+        for x in range(masked.shape[1]):
+            nChroms.append(2 * masked[:, x].count(axis=0))
+            nRef.append(np.where(masked[:, x] == 0)[0].shape[0] * 2 + np.where(masked[:, x] == 1)[0].shape[0])
+
+        raf = np.array([2 * x * (1 - x) for x in [nRef[i] / c for i, c in enumerate(nChroms)]])
+
+        # Fold homozygotes:
+        masked[masked == 2] = 0
+        observed_Het = masked.mean(axis=1)
+
+        F = ma.empty(masked.shape[0])
+        for h in range(masked.shape[0]):
+            this_het = masked[h, :]
+            this_raf = ma.array(raf, mask=ma.getmask(this_het))
+            F[h] = 1 - (this_het.mean() / this_raf.mean())
+
+        F = ma.array(F, mask=[np.isnan(x) for x in F])
+        these_means[:, w] = F
+
         if stop >= nGeno:
             realStop = nGeno - 1
         else:
@@ -160,41 +284,45 @@ def windowHet(geno, posdf, scaf, wSize=50, wStep=None):
         stop += wStep
         w += 1
 
-    return ([these_means, wCenterPos])
+    centers = [x for x in np.array(wCenterPos)[~np.all(these_means.mask, axis=0)]]
+    these_means = these_means[:, ~np.all(these_means.mask, axis=0)]
+
+    return ([these_means, centers])
 
 #########################################
 # Classify blocks in uni- or bimodal:
-def classifyWindows(meanArray, centers, init=None, gff=None, scaf=None, doPlot=True):
+def classifyWindows(meanArray, init=None, alpha=float(args.alpha)):
+
     assignArray = np.full([meanArray.shape[0], meanArray.shape[1]], np.nan)
     pvals, whichBimodals = [], []
-
-    if doPlot:
-        plt.rcParams['figure.figsize'] = [18, 6]
-
-        if gff is not None and scaf is not None:
-            # Draw mRNA bands:
-            this_gff = gff.loc[gff["scaffold"] == scaf]
-
-            for i in range(this_gff.shape[0]):
-                plt.axvspan(this_gff.iloc[i]["start"], this_gff.iloc[i]["end"], color="k", alpha=.1)
-
     for x in range(meanArray.shape[1]):
-        assign, pval, isBimodal = k2_lrt(meanArray[:, x], init_=init, alpha=.01)
+        assign, pval, isBimodal = k2_lrt(meanArray[:, x], init_=init, alpha=alpha)
         assignArray[:, x] = assign
         pvals.append(pval)
         whichBimodals.append(isBimodal)
 
-        if doPlot:
-            if isBimodal == 1:
-                col = ["#61E294" if a == 1 else "#FFC857" for a in assign]
-            else:
-                col = "#62929E"
-            plt.scatter([centers[x]] * meanArray.shape[0], meanArray[:, x], c=col, s=2)
-
-    if doPlot:
-        plt.show()
-
     return ([assignArray, pvals, whichBimodals])
+
+#########################################
+# Produce a scaffold-level plot: ## NOTE: It would be nice to produce a genome-level summary plot ####
+def makePlot(meanArray, centers, isBimodal, scaf, gff):
+
+    plt.rcParams['figure.figsize'] = [18, 6]
+
+    if gff is not None and scaf is not None:
+        # Draw mRNA bands:
+        this_gff = gff.loc[gff["scaffold"] == scaf]
+        for i in range(this_gff.shape[0]):
+            plt.axvspan(this_gff.iloc[i]["start"], this_gff.iloc[i]["end"], color="k", alpha=.1)
+
+    for x in range(meanArray.shape[1]):
+        if isBimodal == 1:
+            col = ["#61E294" if a == 1 else "#FFC857" for a in assign]
+        else:
+            col = "#62929E"
+        plt.scatter([centers[x]] * meanArray.shape[0], meanArray[:, x], c=col, s=2)
+
+    plt.show()
 
 #########################################
 # Calculate the likelihood for being a Z-linked scaffold:
@@ -238,15 +366,18 @@ def ScafLRT(groups, meanArray):
 
     return (pval)
 
-# If we process only one scaffold:
-if args.chrom:
-    meanArray, centers = windowHet(geno, posdf, scaf=args.chrom, wSize=wSize, wStep=wStep)
+########################################################################################################################
+# PROCEDURE 1: we process only one scaffold
 
+if args.chrom:
+
+    meanArray, centers = windowHet(geno, posdf, scaf=args.chrom, wSize=wSize, wStep=wStep)
+    #print(meanArray)
     if not args.sexes:
         init = "k-means++"
     else:
         init = sexAssign
-    assignArray, pvals, whichBimodals = classifyWindows(meanArray=meanArray, centers=centers, init=init, gff=gff, doPlot=args.doPlot)
+    assignArray, pvals, whichBimodals = classifyWindows(meanArray=meanArray, init=init)
 
     if not args.sexes:
         groups = [int(round(x)) for x in np.mean(assignArray, axis=1)]
@@ -256,9 +387,59 @@ if args.chrom:
 
     print(scaf_pval)
 
+########################################################################################################################
+# PROCEDURE 2: we process all scaffolds
+else:
+
+    scafIsBimodal, groups, meanArrays, assignArrays = [], [], [], []
+
+    if not args.sexes:
+        init = "k-means++"
+    else:
+        init = sexAssign
+
+    # First pass: we determine grouping per scaffold:
+    for scaf in scaffolds:
+
+        print("Processing " + scaf + "   \t| Computing heterozygosity   \t|")
+        meanArray, centers = windowHet(geno, posdf, scaf=scaf, wSize=wSize, wStep=wStep)
+        print("Processing " + scaf + "   \t| Classifying SNP blocks   \t|")
+        assignArray, pvals, whichBimodals = classifyWindows(meanArray=meanArray, init=init)
+        #these_groups = [int(round(x)) for x in np.mean(assignArray, axis=1)]
+        these_groups = [x for x in np.mean(assignArray, axis=1)]
+        print("Processing " + scaf + "   \t| " + str(sum(whichBimodals)) + " blocks are bimodal out of " + str(len(whichBimodals)) + "   \t|")
+        groups.append(these_groups)
+        meanArrays.append(meanArray)
+        assignArrays.append(assignArray)
+
+        # If any block is bimodal, we retain the scaffold as potentially testable:
+        if not all(x == 0 for x in np.mean(assignArray, axis=1)):
+            scafIsBimodal.append(True)
+        else:
+            scafIsBimodal.append(False)
+
+    #for i, x in enumerate(scafIsBimodal):
+    #    if x:
+    #        print(assignArrays[i])
+
+    all_assignments = np.concatenate([assignArrays[i] for i, x in enumerate(scafIsBimodal) if x], axis=1)
+    allAssignList = []
+    for a in range(all_assignments.shape[1]):
+        allAssignList.append([x for x in all_assignments[:,a]])
+    c = Counter(str(elem) for elem in allAssignList)
+    for x in c:
+        print(c[x], x)
+
+    # Second pass: we evaluate the grouping
+    # In this counter, we take the highest ranking that is not all zeros -> this is the evaluation grouping
+    # If there is a prior grouping, we check if it is the same. We return both but we kindly say so :-)
+
+
+        #scaf_pval = ScafLRT(groups, meanArray)
+        #scaf_pvals.append(scaf_pval)
 
 # TODO:
-# Test how well kmeans converge with a false init assignment
+# Test how well kmeans converge with a false init assignment <- WELL !
 # Loop through scaffolds, and use the first significantly sex-linked scaffold for initial sex assignment
 # Reassess the assignment against the next significant sex-linked scaffold. This will work if kmeans is robuts to init state.
 # Return pvalue for the proposed grouping, but also pvalue for an eventual better grouping:
@@ -266,3 +447,6 @@ if args.chrom:
 # Return a table of scaffolds and pvalues, as well as a list of sex assignments, and Z-linked chromosomes
 
 # At the scaffold level, Benjamini-Hochberg correction for non-independent multiple tests
+
+# For W and mtDNA, look at coverage + homozygosity
+## ALLOW FOR LOADING IDX FILE LIST FOR MTDNA
