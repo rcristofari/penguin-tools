@@ -35,14 +35,14 @@ warnings.filterwarnings("ignore")                         #
 
 #########################################
 # Load the individual and position files
-print("-------------------------------------------------")
+print("------------------------------------------------")
 print("Loading SNP metadata from " + os.path.abspath(args.geno + ".012.pos"))
 posdf = pd.read_csv(args.geno + ".012.pos", delimiter = "\t", header=None, names=("chrom", "pos"))
 ind = [x for x in pd.read_csv(args.geno + ".012.indv", delimiter = "\t", header=None)[0]]
 nPos = posdf.shape[0]
 nInd = len(ind)
 print("Read " + str(posdf.shape[0]) + " positions")
-print("-------------------------------------------------")
+print("------------------------------------------------")
 
 #########################################
 # We extract the list of available scaffolds:
@@ -64,10 +64,11 @@ print("Loading genotypes from " + os.path.abspath(args.geno + ".012"))
 genoList = []
 with open(args.geno + ".012") as ifile:
     for line in ifile:
-        genoList.append([int(x) for x in line.strip("\n").split("\t")])
+        genoList.append([int(x) for x in line.strip("\n").split("\t")][1:])
 geno = np.array(genoList)
+del(genoList)
 print("Read " + str(geno.shape[1]) + " genotypes for " + str(geno.shape[0]) + " samples")
-print("-------------------------------------------------")
+print("------------------------------------------------")
 
 #########################################
 # Load the gff file:
@@ -81,15 +82,13 @@ else:
 # Load the sex assignment file:
 if args.sexes:
     print("Using prior sex assignments:")
-    print("+-----------------------------------------------+")
+    print("+----------------------------------------------+")
     sexes = pd.read_csv(args.sexes, delimiter="\t", header=None, names=("ind", "sex"))
     sexes = dict(zip(sexes["ind"], sexes["sex"]))
     sexAssign = [0 if sexes[x] == "homogametic" else 1 for x in ind]
-    maxStrLen = max([len(l) for l in sexes]) + 4
     for s in sexes:
-        paddedStr = s + "."*(maxStrLen - len(s))
-        print("| " + paddedStr + sexes[s] + "\t|")
-    print("+-----------------------------------------------+")
+        print(str("| " + s).ljust(28, ".") + str(sexes[s] + " |").rjust(20, "."))
+    print("+----------------------------------------------+")
 
 else:
     sexes, sexAssign = None, None
@@ -361,7 +360,7 @@ def ScafLRT(groups, meanArray):
 
     # Likelihood-ratio test:
     LRT = - 2 * (np.sum(K1_lnL) - np.sum(K2_lnL))
-    pval = chi2.sf(LRT, 2 * meanArray.shape[1] - 2 + len(dat))
+    pval = chi2.sf(LRT, 3 * meanArray.shape[1] - 1 + len(groups)*meanArray.shape[1])
     # One degree of freedom for each additional mean and sd, and one per a priori individual assignment
 
     return (pval)
@@ -401,13 +400,13 @@ else:
     # First pass: we determine grouping per scaffold:
     for scaf in scaffolds:
 
-        print("Processing " + scaf + "   \t| Computing heterozygosity   \t|")
+        print(str("Processing " + scaf).ljust(25, " ") + "| Computing heterozygosity |", end="")
         meanArray, centers = windowHet(geno, posdf, scaf=scaf, wSize=wSize, wStep=wStep)
-        print("Processing " + scaf + "   \t| Classifying SNP blocks   \t|")
+        #print(str("Processing " + scaf).ljust(28, " ") + "| " + str("Classifying SNP blocks").ljust(35, " ") + "|")
+        print(" Classifying SNP blocks |", end="")
         assignArray, pvals, whichBimodals = classifyWindows(meanArray=meanArray, init=init)
-        #these_groups = [int(round(x)) for x in np.mean(assignArray, axis=1)]
         these_groups = [x for x in np.mean(assignArray, axis=1)]
-        print("Processing " + scaf + "   \t| " + str(sum(whichBimodals)) + " blocks are bimodal out of " + str(len(whichBimodals)) + "   \t|")
+        print(str(" " + str(sum(whichBimodals)) + " blocks are bimodal out of " + str(len(whichBimodals))).ljust(35, " ") + "|")
         groups.append(these_groups)
         meanArrays.append(meanArray)
         assignArrays.append(assignArray)
@@ -426,27 +425,73 @@ else:
     allAssignList = []
     for a in range(all_assignments.shape[1]):
         allAssignList.append([x for x in all_assignments[:,a]])
-    c = Counter(str(elem) for elem in allAssignList)
-    for x in c:
-        print(c[x], x)
+    #c = Counter(str(elem) for elem in allAssignList)
+    #for x in c:
+    #    print(c[x], x)
 
+    # Initialize list
+    countDict = {}
+
+    # Use Append through Iteration
+    for elem in allAssignList:
+        countDict.setdefault(tuple(elem), list()).append(1)
+    for k, v in countDict.items():
+        countDict[k] = sum(v)
+
+    # Print Result
+    sortedCounts = sorted(zip([x for x in countDict], [countDict[x] for x in countDict]), key=lambda x: x[1], reverse=True)
+    sortedVariableCounts = []
+    for c in sortedCounts:
+        if not all(x == 0 for x in [y for y in c[0] if y == y]):
+            #print(str(c[1]) + " :\t" + str(c[0]))
+            sortedVariableCounts.append(c)
+
+    majorityGrouping = [x for x in sortedVariableCounts[0][0]]
+    asWords = ["heterogametic" if x == 0 else "homogametic" for x in majorityGrouping]
+    consensusAssign = dict(zip(ind, asWords))
+
+    #########################################
+    # Load the sex assignment file:
+    if args.sexes:
+        print("Prior sex assignment".ljust(47, " ") + "| Consensus")
+        print("+------------------------------------------------------------------+")
+        for s in consensusAssign:
+            print(str("| " + s).ljust(28, ".") + str(sexes[s] + " |").rjust(20, ".") + (" " + consensusAssign[s]).ljust(19, " ") + "|")
+        print("+------------------------------------------------------------------+")
+
+    else:
+        print("Consensus sex assignments")
+        print("+----------------------------------------------+")
+        for s in consensusAssign:
+            print(str("| " + s).ljust(28, ".") + str(consensusAssign[s] + " |").rjust(20, "."))
+        print("+----------------------------------------------+")
+
+    with open(args.out + ".sex", "w") as ofile:
+        for s in consensusAssign:
+            ofile.write(s + "\t" + consensusAssign[s] + "\n")
+
+    #########################################
     # Second pass: we evaluate the grouping
-    # In this counter, we take the highest ranking that is not all zeros -> this is the evaluation grouping
-    # If there is a prior grouping, we check if it is the same. We return both but we kindly say so :-)
 
+    if args.sexes:
+        scaf_pvals_prior, scaf_pvals_denovo = [], []
+        prior_groups = sexAssign
+        denovo_groups = majorityGrouping
 
-        #scaf_pval = ScafLRT(groups, meanArray)
-        #scaf_pvals.append(scaf_pval)
+        for i, scaf in enumerate(scaffolds):
+            print(str("Processing " + scaf).ljust(25, " ") + "| Computing scaffold-level p-value |", end="")
+            scaf_pval_prior = ScafLRT(prior_groups, meanArrays[i])
+            scaf_pvals_prior.append(scaf_pval_prior)
 
-# TODO:
-# Test how well kmeans converge with a false init assignment <- WELL !
-# Loop through scaffolds, and use the first significantly sex-linked scaffold for initial sex assignment
-# Reassess the assignment against the next significant sex-linked scaffold. This will work if kmeans is robuts to init state.
-# Return pvalue for the proposed grouping, but also pvalue for an eventual better grouping:
-# if assignments are provided, also compute the scaffold likelihood based on the mean assignments and remember both
-# Return a table of scaffolds and pvalues, as well as a list of sex assignments, and Z-linked chromosomes
+            scaf_pval_denovo = ScafLRT(majorityGrouping, meanArrays[i])
+            scaf_pvals_denovo.append(scaf_pval_denovo)
 
-# At the scaffold level, Benjamini-Hochberg correction for non-independent multiple tests
+            if scaf_pval_prior <= args.alpha:
+                print(str(" A priori group p-val = " + str(round(scaf_pval_prior, 4)) + "*").ljust(30, " ") + "|", end = "")
+            else:
+                print(str(" A priori group p-val = " + str(round(scaf_pval_prior, 4))).ljust(30, " ") + "|", end = "")
 
-# For W and mtDNA, look at coverage + homozygosity
-## ALLOW FOR LOADING IDX FILE LIST FOR MTDNA
+            if scaf_pval_denovo <= args.alpha:
+                print(str(" De novo group p-val = " + str(round(scaf_pval_denovo, 4)) + "*").ljust(30, " ") + "|", end = "\n")
+            else:
+                print(str(" De novo group p-val = " + str(round(scaf_pval_denovo, 4))).ljust(30, " ") + "|", end = "\n")
