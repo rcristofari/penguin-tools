@@ -6,20 +6,22 @@ parser.add_argument('--gff', help='Annotation file in GFF format (gzipped or not
 parser.add_argument('--out', help='Basename of the output fasta file', default="extracted_cds")
 parser.add_argument('--type', help='Type of output sequence (DNA or AA)', default="DNA")
 parser.add_argument('--verbose', action='store_true', help="Display sequences on screen as it goes")
+parser.add_argument('--legacy', action='store_true', help="Display sequences on screen as it goes")
 
 args = parser.parse_args()
 
 # Imports for running the script:
 import pandas as pd
 from Bio import SeqIO
-from Bio.Alphabet import generic_dna
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+if args.legacy:
+    from Bio.Alphabet import generic_dna
 
 # Load in the genome and parse as a dictionary:
 print("Loading the reference genome...")
 scaf, seq = [], []
-with open(args.ref) as ifile:
+with (gzip.open if args.ref.endswith(".gz") else open)(args.ref, "rt") as ifile:
     for record in SeqIO.parse(ifile, "fasta"):
         scaf.append(record.id)
         seq.append(str(record.seq))
@@ -38,7 +40,10 @@ def extractCDS(feat, genome, verbose=True, phaseshift=0):
     except KeyError:
         return(None)
 
-    record = SeqRecord(Seq(cds, generic_dna))
+    if args.legacy:
+        record = SeqRecord(Seq(cds, generic_dna))
+    else:
+        record = SeqRecord(Seq(cds))
 
     if feat["strand"] == "-":
         seq = str(record.reverse_complement().seq)
@@ -71,7 +76,11 @@ def extractCDS(feat, genome, verbose=True, phaseshift=0):
                     codon = codon.lower()
                 codons.append(codon)
         codons_out = " ".join(codons)
-        AA = str(SeqRecord(Seq(phased, generic_dna)).translate().seq)
+        if args.legacy:
+            AA = str(SeqRecord(Seq(phased, generic_dna)).translate().seq)
+        else:
+            AA = str(SeqRecord(Seq(phased)).translate().seq)
+
         AA_out = "   ".join([x for x in AA])
 
         j = 0
@@ -119,7 +128,10 @@ def extractGene(parent, gff, genome, verbose=True, phaseshift=0, seqType="DNA", 
         print(">" + parent)
         print(gene)
         print("Protein sequence:")
-        aa = str(SeqRecord(Seq(gene, generic_dna)).translate().seq)
+        if args.legacy:
+            aa = str(SeqRecord(Seq(gene, generic_dna)).translate().seq)
+        else:
+            aa = str(SeqRecord(Seq(gene)).translate().seq)
         print(aa)
 
     if seqType == "AA":
