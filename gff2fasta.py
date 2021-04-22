@@ -1,7 +1,7 @@
 import argparse
 
 parser = argparse.ArgumentParser(description='Extract CDS sequences from a reference genome based on a GFF annotation file. All CDS are phased and concatenated in the order of the corresponding mRNA (not tested on anything else than the Emperor penguin reference genome)')
-parser.add_argument('--ref', help='Reference genome sequence in fasta format (unzipped)')
+parser.add_argument('--ref', help='Reference genome sequence in fasta format (gzipped or not)')
 parser.add_argument('--gff', help='Annotation file in GFF format (gzipped or not)')
 parser.add_argument('--out', help='Basename of the output fasta file', default="extracted_cds")
 parser.add_argument('--type', help='Type of output sequence (DNA or AA)', default="DNA")
