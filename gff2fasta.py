@@ -6,7 +6,7 @@ parser.add_argument('--gff', help='Annotation file in GFF format (gzipped or not
 parser.add_argument('--out', help='Basename of the output fasta file', default="extracted_cds")
 parser.add_argument('--type', help='Type of output sequence (DNA or AA)', default="DNA")
 parser.add_argument('--verbose', action='store_true', help="Display sequences on screen as it goes")
-parser.add_argument('--legacy', action='store_true', help="Display sequences on screen as it goes")
+parser.add_argument('--legacy', action='store_true', help="For use with biopython versions < 1.78")
 
 args = parser.parse_args()
 
