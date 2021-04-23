@@ -12,6 +12,7 @@ args = parser.parse_args()
 
 # Imports for running the script:
 import pandas as pd
+import gzip
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
