@@ -37,7 +37,7 @@ def extractCDS(feat, genome, verbose=True, phaseshift=0):
     # feat is a line from a gff dataframe
     # phaseshift shifts the phase set in the gff to a different value (for testing mainly)
     try:
-        cds = genome[feat["scaffold"]][feat["start"] - 1:feat["end"]]
+        cds = genome[feat["scaffold"]][int(feat["start"]) - 1:feat[int("end")]]
     except KeyError:
         return(None)
 
