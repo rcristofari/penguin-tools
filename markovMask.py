@@ -288,7 +288,7 @@ if args.chrom:
     propLow = round(len(np.where(hmm[0] == 0)[0]) * 100 / len(hmm[0]), 1)
     propHigh = round(len(np.where(hmm[0] == 2)[0]) * 100 / len(hmm[0]), 1)
     print(args.chrom + ": HMM identified %s %% of low-depth and %s %% of high-depth regions" % (propLow, propHigh))
-    print(args.chrom + ": after filtering, we retain %s %% of all sites." % propLost)
+    print(args.chrom + ": after block filtering, we retained %s %% of all sites" % propLost)
     dC, dL, dH = np.mean(np.array(depth)[np.where(hmm[0] == 1)[0]]), np.mean(
         np.array(depth)[np.where(hmm[0] == 0)[0]]), np.mean(np.array(depth)[np.where(hmm[0] == 2)[0]])
     print(args.chrom + ": average depth for retained areas: %.1f. " % (dC))
@@ -320,7 +320,7 @@ if args.chrom:
                     sitefile.write(args.chrom + "\t" + str(pos[i]) + "\n")
                     keptSites += 1
     print("done.")
-    print("After outlier removal, we retained %.1f %% af all sites in the scaffold" % (keptSites * 100 / len(depth)))
+    print("After outlier removal, we retained %.1f %% af all sites" % (keptSites * 100 / len(depth)))
 
 else:
     if not args.separate:
@@ -351,7 +351,7 @@ else:
         propLow = round(len(np.where(hmm[0] == 0)[0])*100 / len(hmm[0]), 1)
         propHigh = round(len(np.where(hmm[0] == 2)[0])*100 / len(hmm[0]), 1)
         print(c + ": HMM identified %s %% of low-depth and %s %% of high-depth regions" % (propLow, propHigh))
-        print(c + ": after block filtering, we retain %s %% of all sites." % propLost)
+        print(c + ": after block filtering, we retained %s %% of all sites" % propLost)
         dC, dL, dH = np.mean(np.array(depth)[np.where(hmm[0] == 1)[0]]), np.mean(np.array(depth)[np.where(hmm[0] == 0)[0]]), np.mean(np.array(depth)[np.where(hmm[0] == 2)[0]])
         print(c + ": average depth for retained areas: %.1f. " % (dC))
         print(c + ": average depth for discarded low: %.1f and high: %.1f" % (dL, dH))
@@ -382,7 +382,7 @@ else:
                         sitefile.write(c + "\t" + str(pos[i]) + "\n")
                         keptSites += 1
         print("done.")
-        print("After outlier removal, we retained %.1f %% af all sites in the scaffold" % (keptSites*100/len(depth)))
+        print("After outlier removal, we retained %.1f %% af all sites" % (keptSites*100/len(depth)))
 
         timePerSite.append((time.time() - scaf_time)/len(depth))
         sitesDone += len(depth)
