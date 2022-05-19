@@ -1,7 +1,7 @@
 import argparse
 
 parser = argparse.ArgumentParser(description='Find sex-related scaffolds and identify sex of samples based on the distribution of heterozygosity. Input files are in the "012" format output by VCFtools. Windows are computed as numbers of SNPs, not as distances along the scaffolds, in order to keep weights homogeneous when computing the composite likelihoods.')
-parser.add_argument('--geno', help='Basename of the input files (VCFtools option --012')
+parser.add_argument('--vcf', help='A (gz)vcf file containing the SNP data')
 parser.add_argument('--out', help='Basename of the output files', default="Same as input prefix")
 parser.add_argument('--wSize', help='Size of the SNP blocks used to compute heterozygosity [50]', default="50")
 parser.add_argument('--wStep', help='Step between the SNP blocks [=wSize, non-overlapping]', default=None)
@@ -15,7 +15,7 @@ parser.add_argument('--verbose', action='store_true', help="Display all runtime 
 args = parser.parse_args()
 
 # Required libraries
-import os, math
+import os, math, linecache
 import pandas as pd
 import numpy as np
 import numpy.ma as ma
@@ -33,22 +33,65 @@ import warnings                                           #
 warnings.filterwarnings("ignore")                         #
 ###########################################################
 
+########################################################################################################################
+# A function to extract locus and individual information from a VCF
+def parseVCFpos(path_in):
+    index, chrom, pos = [], [], []
+    with (gzip.open if path_in.endswith(".gz") else open)(path_in, "rt") as ifile:
+        for idx, line in enumerate(ifile):
+            if line.startswith("#CHROM"):
+                ind = line.split("\t")[9:]
+            elif line[0] != "#":
+                index.append(idx)
+                chrom.append(line.split("\t")[0])
+                pos.append(int(line.split("\t")[1]))
+    posdf = pd.DataFrame(list(zip(chrom, pos)))
+    posdf.columns = ("chrom", "pos")
+    posdf.index = index
+    return(posdf, ind)
+
+########################################################################################################################
+# A function to extract genotypes in 012 format for a given scaffold
+def parseVCF(path_in, posdf, chrom):
+    idx = posdf.loc[posdf["chrom"] == chrom].index
+    nInd = len(linecache.getline(path_in, (idx[0]+1)).split("\t")[9:])
+    out = np.full((nInd, len(idx)), np.nan)
+    for j, i in enumerate(idx):
+        line = linecache.getline(path_in, (i+1))
+        genotypes = [x.split(":")[0] for x in line.split("\t")[9:]]
+        def to012(x):
+            if x[0] == x[2] == "0":
+                return(0)
+            elif x[0] == x[2] == "1":
+                return(2)
+            elif "0" in x and "1" in x:
+                return(1)
+            else:
+                return(-1)
+        out[:,j] = [int(to012(g)) for g in genotypes]
+    return(out)
+
 #########################################
 # Load the individual and position files
 print("------------------------------------------------")
-print("Loading SNP metadata from " + os.path.abspath(args.geno + ".012.pos"))
-posdf = pd.read_csv(args.geno + ".012.pos", delimiter = "\t", header=None, names=("chrom", "pos"))
-ind = [x for x in pd.read_csv(args.geno + ".012.indv", delimiter = "\t", header=None)[0]]
-nPos = posdf.shape[0]
-nInd = len(ind)
+print("Loading SNP metadata from " + os.path.abspath(args.vcf))
+posdf, ind = parseVCFpos(args.vcf)
 print("Read " + str(posdf.shape[0]) + " positions")
 print("------------------------------------------------")
+
+#########################################
+# SET SOME GENERAL VARIABLES:
+
+#########################################
+# Total number of SNPs and individuals:
+nPos = posdf.shape[0]
+nInd = len(ind)
 
 #########################################
 # We extract the list of available scaffolds:
 nSNPs = Counter(posdf["chrom"])
 scaffolds = sorted([s for s in nSNPs if nSNPs[s] > int(args.minSNPs)])
-
+print("After filtering for number of SNPs, we retained %s out of %s scaffolds" % (len(scaffolds), len(nSNPs)))
 
 #########################################
 # Set the window size and step:
@@ -57,18 +100,6 @@ if not args.wStep:
     wStep = int(args.wSize)
 else:
     wStep = args.wStep
-
-#########################################
-# Load the genotype file:
-print("Loading genotypes from " + os.path.abspath(args.geno + ".012"))
-genoList = []
-with open(args.geno + ".012") as ifile:
-    for line in ifile:
-        genoList.append([int(x) for x in line.strip("\n").split("\t")][1:])
-geno = np.array(genoList)
-del(genoList)
-print("Read " + str(geno.shape[1]) + " genotypes for " + str(geno.shape[0]) + " samples")
-print("------------------------------------------------")
 
 #########################################
 # Load the gff file:
@@ -85,7 +116,7 @@ if args.sexes:
     print("+----------------------------------------------+")
     sexes = pd.read_csv(args.sexes, delimiter="\t", header=None, names=("ind", "sex"))
     sexes = dict(zip(sexes["ind"], sexes["sex"]))
-    sexAssign = [0 if sexes[x] == "homogametic" else 1 for x in ind]
+    sexAssign = [1 if sexes[x] == "homogametic" else 0 for x in ind]
     for s in sexes:
         print(str("| " + s).ljust(28, ".") + str(sexes[s] + " |").rjust(20, "."))
     print("+----------------------------------------------+")
@@ -170,83 +201,20 @@ def k2_lrt(dat, init_="k-means++", alpha=float(args.alpha)):
 
 #########################################
 # Compute heterozygosity on blocks of SNPs:
-def windowHet_v0(geno, posdf, scaf, wSize=50, wStep=None):
-
+def windowHet(these_geno, posdf, scaf, wSize=50, wStep=None):
     if not wStep:
         wStep = wSize
 
     these_idx = [x for x in posdf.loc[posdf["chrom"] == scaf].index]
     these_pos = np.array([x for x in posdf["pos"].loc[these_idx]])
-    these_geno = geno[:, these_idx]
-
-    # Bases with "0" and "2" are equally monomorphic. Here we set them all to "0":
-    these_geno[these_geno == 2] = 0
-
     nGeno = these_geno.shape[1]
-    print(nGeno)
     nWindows = math.ceil((nGeno - wSize) / wStep) + 1
-
-    these_means = np.full([nInd, nWindows], np.nan)
-    wCenterPos = []
-    start = 0
-    stop = wSize
-    w = 0
-
-    while stop <= (nGeno + wStep):
-        wData = these_geno[:, start:stop]
-
-        # per-SNP reference allele frequency:
-        masked = ma.array(wData, mask=[wData == -1])
-
-        nChroms, nRef = [], []
-        for x in range(masked.shape[1]):
-            nChroms.append(2 * masked[:, x].count(axis=0))
-            nRef.append(np.where(masked[:, x] == 0)[0].shape[0] * 2 + np.where(masked[:, x] == 1)[0].shape[0])
-        raf = np.array([2 * x * (1 - x) for x in [nRef[i] / c for i, c in enumerate(nChroms)]])
-
-        # Fold homozygotes:
-        masked[masked == 2] = 0
-
-        # Compute adjusted heterozygosity taking into account missing sites:
-        F = []
-        for h in range(masked.shape[0]):
-            this_het = masked[h, :]
-            this_raf = ma.array(raf, mask=ma.getmask(this_het))
-            F.append(1 - (this_het.mean() / this_raf.mean()))
-        these_means[:, w] = ma.array(F, mask=[F is np.nan])
-
-        if stop >= nGeno:
-            realStop = nGeno - 1
-        else:
-            realStop = stop
-        wCenterPos.append(np.mean([these_pos[start], these_pos[realStop]]))
-
-        start += wStep
-        stop += wStep
-        w += 1
-    return ([these_means, wCenterPos])
-
-
-def windowHet(geno, posdf, scaf, wSize=50, wStep=None):
-    if not wStep:
-        wStep = wSize
-
-    these_idx = [x for x in posdf.loc[posdf["chrom"] == scaf].index]
-    these_pos = np.array([x for x in posdf["pos"].loc[these_idx]])
-    these_geno = geno[:, these_idx]
-
-    nGeno = these_geno.shape[1]
-
-    nWindows = math.ceil((nGeno - wSize) / wStep) + 1
-
     these_means = ma.empty([nInd, nWindows])
-    wCenter = []
     wCenterPos = []
     start = 0
     stop = wSize
     w = 0
 
-    #while start <= (nGeno - wSize):
     while stop < (nGeno + wStep):
         wData = these_geno[:, start:stop]
 
@@ -262,7 +230,6 @@ def windowHet(geno, posdf, scaf, wSize=50, wStep=None):
 
         # Fold homozygotes:
         masked[masked == 2] = 0
-        observed_Het = masked.mean(axis=1)
 
         F = ma.empty(masked.shape[0])
         for h in range(masked.shape[0]):
@@ -272,13 +239,11 @@ def windowHet(geno, posdf, scaf, wSize=50, wStep=None):
 
         F = ma.array(F, mask=[np.isnan(x) for x in F])
         these_means[:, w] = F
-
         if stop >= nGeno:
             realStop = nGeno - 1
         else:
             realStop = stop
         wCenterPos.append(np.mean([these_pos[start], these_pos[realStop]]))
-
         start += wStep
         stop += wStep
         w += 1
@@ -325,7 +290,7 @@ def makePlot(meanArray, centers, isBimodal, scaf, gff):
 
 #########################################
 # Calculate the likelihood for being a Z-linked scaffold:
-def ScafLRT(groups, meanArray):
+def ScafLRT_v0(groups, meanArray):
     # Note that this will ONLY be accurate with NON-OVERLAPPING windows..!
     from scipy.stats import norm
     from scipy.stats.distributions import chi2
@@ -365,6 +330,50 @@ def ScafLRT(groups, meanArray):
 
     return (pval)
 
+def ScafLRT(geno, posdf, groups, scaf):
+
+    these_idx = [x for x in posdf.loc[posdf["chrom"] == scaf].index]
+    these_geno = geno[:, these_idx]
+    these_geno = ma.array(these_geno, mask = [these_geno == -1])
+
+    # Ref allele frequency
+    nChroms, nRef = [], []
+    for x in range(these_geno.shape[1]):
+        nChroms.append(2 * these_geno[:, x].count(axis=0))
+        nRef.append(np.where(these_geno[:, x] == 0)[0].shape[0] * 2 + np.where(these_geno[:, x] == 1)[0].shape[0])
+
+    expHet = np.mean(np.array([2 * x * (1 - x) for x in [nRef[i] / c for i, c in enumerate(nChroms)]]))
+    these_geno[these_geno == 2] = 0
+    obsHet = these_geno.mean(axis=1)
+
+    F = np.array([(1 - obsHet[i]/expHet) for i in range(obsHet.shape[0])])
+
+    # One cluster model log-likelihood:
+    mu_1 = np.mean(F)
+    sigma_1 = np.std(F)
+    lnL_1 = np.sum(np.log(norm.pdf(F, mu_1, sigma_1)))
+
+    # Two cluster model log-likelihood:
+    # Cluster 0:
+    dat_0 = F[np.where(np.array(groups) == 0)]
+    mu_2_0 = np.mean(dat_0)
+    sigma_2_0 = np.std(dat_0)
+    lnL_2_0 = np.sum(np.log(norm.pdf(dat_0, mu_2_0, sigma_2_0)))
+
+    # Cluster 1:
+    dat_1 = F[np.where(np.array(groups) == 1)]
+    mu_2_1 = np.mean(dat_1)
+    sigma_2_1 = np.std(dat_1)
+    lnL_2_1 = np.sum(np.log(norm.pdf(dat_1, mu_2_1, sigma_2_1)))
+    lnL_2 = lnL_2_0 + lnL_2_1
+
+    # Likelihood-ratio test:
+    LRT = - 2 * (lnL_1 - lnL_2)
+
+    dof = 2 + len(groups)
+    pval = chi2.sf(LRT,  dof)
+    return(pval)
+
 ########################################################################################################################
 # PROCEDURE 1: we process only one scaffold
 
@@ -379,7 +388,7 @@ if args.chrom:
     assignArray, pvals, whichBimodals = classifyWindows(meanArray=meanArray, init=init)
 
     if not args.sexes:
-        groups = [int(round(x)) for x in np.mean(assignArray, axis=1)]
+        groups = [1 - int(round(x)) for x in np.mean(assignArray, axis=1)]
     else:
         groups = sexAssign
     scaf_pval = ScafLRT(groups, meanArray)
@@ -398,11 +407,11 @@ else:
         init = sexAssign
 
     # First pass: we determine grouping per scaffold:
-    for scaf in scaffolds:
-
-        print(str("Processing " + scaf).ljust(25, " ") + "| Computing heterozygosity |", end="")
+    for scaf in scaffolds[-100:]:
+        print(str("Processing " + scaf).ljust(25, " ") + "| Loading genotypes", end="")
+        geno = parseVCF(args.vcf, posdf, scaf)
+        print(" | Computing heterozygosity |", end="")
         meanArray, centers = windowHet(geno, posdf, scaf=scaf, wSize=wSize, wStep=wStep)
-        #print(str("Processing " + scaf).ljust(28, " ") + "| " + str("Classifying SNP blocks").ljust(35, " ") + "|")
         print(" Classifying SNP blocks |", end="")
         assignArray, pvals, whichBimodals = classifyWindows(meanArray=meanArray, init=init)
         these_groups = [x for x in np.mean(assignArray, axis=1)]
@@ -417,18 +426,10 @@ else:
         else:
             scafIsBimodal.append(False)
 
-    #for i, x in enumerate(scafIsBimodal):
-    #    if x:
-    #        print(assignArrays[i])
-
     all_assignments = np.concatenate([assignArrays[i] for i, x in enumerate(scafIsBimodal) if x], axis=1)
     allAssignList = []
     for a in range(all_assignments.shape[1]):
         allAssignList.append([x for x in all_assignments[:,a]])
-    #c = Counter(str(elem) for elem in allAssignList)
-    #for x in c:
-    #    print(c[x], x)
-
     # Initialize list
     countDict = {}
 
@@ -443,7 +444,6 @@ else:
     sortedVariableCounts = []
     for c in sortedCounts:
         if not all(x == 0 for x in [y for y in c[0] if y == y]):
-            #print(str(c[1]) + " :\t" + str(c[0]))
             sortedVariableCounts.append(c)
 
     majorityGrouping = [x for x in sortedVariableCounts[0][0]]
@@ -451,7 +451,7 @@ else:
     consensusAssign = dict(zip(ind, asWords))
 
     #########################################
-    # Load the sex assignment file:
+    # Display and output sex assignments
     if args.sexes:
         print("Prior sex assignment".ljust(47, " ") + "| Consensus")
         print("+------------------------------------------------------------------+")
@@ -478,20 +478,20 @@ else:
         prior_groups = sexAssign
         denovo_groups = majorityGrouping
 
-        for i, scaf in enumerate(scaffolds):
+        for scaf in scaffolds[-100:]:
             print(str("Processing " + scaf).ljust(25, " ") + "| Computing scaffold-level p-value |", end="")
-            scaf_pval_prior = ScafLRT(prior_groups, meanArrays[i])
+            scaf_pval_prior = ScafLRT(geno, posdf, prior_groups, scaf)
             scaf_pvals_prior.append(scaf_pval_prior)
 
-            scaf_pval_denovo = ScafLRT(majorityGrouping, meanArrays[i])
+            scaf_pval_denovo = ScafLRT(geno, posdf, denovo_groups, scaf)
             scaf_pvals_denovo.append(scaf_pval_denovo)
 
             if scaf_pval_prior <= args.alpha:
-                print(str(" A priori group p-val = " + str(round(scaf_pval_prior, 4)) + "*").ljust(30, " ") + "|", end = "")
+                print(str(" A priori group p-val = " + str(round(scaf_pval_prior, 4)) + "*").ljust(30, " ") + "|", end="")
             else:
-                print(str(" A priori group p-val = " + str(round(scaf_pval_prior, 4))).ljust(30, " ") + "|", end = "")
+                print(str(" A priori group p-val = " + str(round(scaf_pval_prior, 4))).ljust(30, " ") + "|", end="")
 
             if scaf_pval_denovo <= args.alpha:
-                print(str(" De novo group p-val = " + str(round(scaf_pval_denovo, 4)) + "*").ljust(30, " ") + "|", end = "\n")
+                print(str(" De novo group p-val = " + str(round(scaf_pval_denovo, 4)) + "*").ljust(30, " ") + "|", end="\n")
             else:
-                print(str(" De novo group p-val = " + str(round(scaf_pval_denovo, 4))).ljust(30, " ") + "|", end = "\n")
+                print(str(" De novo group p-val = " + str(round(scaf_pval_denovo, 4))).ljust(30, " ") + "|", end="\n")

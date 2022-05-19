@@ -27,7 +27,7 @@ with gzip.open(args.gzvcf, "rt") as ifile:
             # For header lines:
             if line[0] == "#":
                 ofile.write(line)
-       # For record lines:
+            # For record lines:
             else:
                 lineN += 1
                 row = line.strip("\n").split("\t")
@@ -36,7 +36,6 @@ with gzip.open(args.gzvcf, "rt") as ifile:
                 ref = row[3]
                 alt = row[4]
                 anc = genome[s][p-1]
-
 
                 if anc == alt:
                     reverseGT = True
