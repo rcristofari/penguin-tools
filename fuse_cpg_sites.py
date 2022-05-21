@@ -12,7 +12,7 @@ if args.source not in ('bismark', 'bsbolt'):
 
 else:
     print("-----------------------------------------------------------------------")
-    print(f"Processing {args.source} methylation file {}")
+    print(f"Processing {args.source} methylation file {args.input}")
 
 if args.source == 'bismark':
 
@@ -28,7 +28,7 @@ if args.source == 'bismark':
     print(f"CpG coverage file: {path_strands}")
     print(f"Report file: {path_report}")
 
-    i = 0
+    counter = 0
     start_time = time.time()
 
     with gzip.open(path_in, 'rt') as ifile, open(path_out, 'w') as ofile, open(path_strands, 'w') as strandfile:
@@ -78,6 +78,10 @@ if args.source == 'bismark':
 
                 pass
 
+        counter += 1
+        if counter % 1000 == 0:
+            print(f"{time.asctime()} | Processed {counter} CpG sites", end="\r")
+
     with open(path_report, 'w') as ofile:
         nCpG = [nCpG_plus, nCpG_minus, nCpG_both]
         covCpG = [covCpG_plus, covCpG_minus, covCpG_both]
@@ -105,7 +109,7 @@ else:
     print(f"CpG coverage file: {path_single_cov_matrix}")
     print(f"C/T count file: {path_single_count_matrix}")
 
-    i = 0
+    counter = 0
     start_time = time.time()
 
 
@@ -171,9 +175,9 @@ else:
             prev_chrom, prev_pos = prev_row[0].split(":")
             prev_count = [float(x) if x != "nan" else float(0) for x in prev_row[1:]]
 
-            i += 1
-            if i % 1000 == 0:
-                print(f"{time.asctime()} | Processed {i} CpG sites", end="\r")
+            counter += 1
+            if counter % 1000 == 0:
+                print(f"{time.asctime()} | Processed {counter} CpG sites", end="\r")
 
 print("\n-----------------------------------------------------------------------")
 print(f"Completed in {str(datetime.timedelta(seconds=round(time.time() - start_time)))}")
