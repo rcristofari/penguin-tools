@@ -1,23 +1,28 @@
-import argparse, struct, os, gzip, time, datetime
-import numpy as np
+import argparse
 
 parser = argparse.ArgumentParser(description="Create a feature map for a reference genome from a GFF file and a CpG cluster map. Create a binary methylation matrix file referenced to genome features, for a given set of individuals.")
-parser.add_argument('--ref', help='Reference genome path (gzipped fasta file)')
-parser.add_argument('--gff', help='Annotation file path (gzipped gff file)')
-parser.add_argument('--cpgi', help='CpG cluster file (txt file from gCluster)')
-parser.add_argument('--vcf', help='SNP database in VCF format, to annotate C/T polymorphisms')
-parser.add_argument('--cpg', help='Annotate CpG sites from the reference genome')
+parser.add_argument('--ref', help='Reference genome path in (gz)fasta')
+parser.add_argument('--gff', help='Annotation file path (gz)gff')
+parser.add_argument('--cpgi', help='CpG cluster file (gz)txt file from gCluster')
+parser.add_argument('--vcf', help='SNP database in (gz)VCF format, to annotate C/T polymorphisms')
+parser.add_argument('--cpg', help='Annotate CpG sites from the reference genome', action='store_true')
 parser.add_argument('--map', help='Binary feature map file output by a previous run')
-parser.add_argument('--matrix', help='Methylation matrix (one position per line, one sample per column, no missing values)')
+parser.add_argument('--matrix', help='Methylation count matrix from bsbolt, mC and totalC per sample')
 parser.add_argument('--samples', help='Sample list (text file, one sample per row)')
 parser.add_argument('--output', help='Output folder path')
 args = parser.parse_args()
 
+import struct, os, gzip, time, datetime
+
 start_time = time.time()
 
-genome_file = args.ref
-if not os.path.isfile(genome_file):
-    print(f"Genome file {genome_file} could not be found")
+if args.ref:
+    genome_file = args.ref
+    if not os.path.isfile(genome_file):
+        print(f"Genome file {genome_file} could not be found")
+        quit()
+else:
+    print("You must specify a reference genome file - exiting.")
     quit()
 
 if args.gff:
@@ -52,6 +57,17 @@ if args.cpg:
 else:
     doCpG = False
 
+if args.output:
+    out_dir = args.output
+    if not os.path.isdir(out_dir):
+        print(f"Output directory {out_dir} could not be found, defaulting to current directory")
+        out_dir = "./"
+    if not out_dir.endswith("/"):
+        out_dir += "/"
+else:
+    out_dir = "./"
+    print(f"Defaulting to current directory {os.path.abspath(os.getcwd())}")
+
 if args.map:
     doMap = False
     map_path = args.map
@@ -70,28 +86,30 @@ if args.matrix:
         print(f"Matrix file {matrix_file} could not be found")
         quit()
 
-    sample_file = args.samples
-    if not os.path.isfile(sample_file):
-        print(f"Sample list {sample_file} could not be found")
-        quit()
+    if args.samples:
+        sample_file = args.samples
+        if not os.path.isfile(sample_file):
+            print(f"Sample list {sample_file} could not be found")
+            quit()
+        else:
+            samples = []
+            with open(sample_file, 'r') as ifile:
+                for line in ifile:
+                    samples.append(line.strip("\n"))
+            print(f"Processing data for {len(samples)} samples.")
     else:
-        samples = []
-        with open(sample_file, 'r') as ifile:
-            for line in ifile:
-                samples.append(line.strip("\n"))
-        print(f"Processing data for {len(samples)} samples.")
+        # Get all samples from the header of the methylation matrix:
+        with (gzip.open if matrix_file.endswith("gz") else open)(matrix_file, 'rt') as mfile:
+            line = next(mfile).strip("\n").split("\t")
+            samples = [x.strip("_meth_cytosine") for x in line if x.endswith("_meth_cytosine")]
+            print(f"Processing data for all {len(samples)} samples.")
+
 else:
     doMatrix = False
 
-if args.output:
-    out_dir = args.output
-    if not os.path.isdir(out_dir):
-        print(f"Output directory {out_dir} could not be found, defaulting to current directory")
-        out_dir = "./"
-    if not out_dir.endswith("/"):
-        out_dir += "/"
-else:
-    out_dir = "./"
+
+
+print("\n---------------------------------------------------------------------------------")
 
 #------------------------------------------------------------------------------#
 # The exponents used for the bit codes:
@@ -103,7 +121,7 @@ codes = {'cpg':0, 'cpgi':1, 'cisreg':2, 'intron':3, 'exon':4, 'ct_snp':5}
 
 print("# Calculating target genome size...", end='')
 genome_size = 0
-with gzip.open(genome_file, 'rt') as gfile:
+with (gzip.open if genome_file.endswith("gz") else open)(genome_file, 'rt') as gfile:
     for line in gfile:
         if line.startswith(">"):
             pass
@@ -148,13 +166,11 @@ print("done.")
 # Create the feature map file
 
 if doMap:
-    print("\n# Initializing the feature map file...")
+    print("# Initializing the feature map file...", end="\r")
     # Initialise an empty code file:
     with open(map_path, 'wb') as binfile:
-        for i in range(genome_size):
-            binfile.write((0).to_bytes(1, 'little'))
-            if i % 1000000 == 0:
-                print(f"{time.asctime()} | Processed {i/1000000} Mbases...", end="\r")
+        binfile.write((0).to_bytes(genome_size, 'little'))
+        print("done.")
 
 #------------------------------------------------------------------------------#
 # Calculate intron, exon and promoter boundaries from the GFF file
@@ -301,12 +317,58 @@ if doCpG:
     this_type = 2**codes[feature_type]
     position = 0
     with (gzip.open if genome_file.endswith("gz") else open)(genome_file, 'rt') as ifile, open(map_path, 'rb+') as binfile:
+        # for line in ifile:
+        #     if line.startswith(">"):
+        #         for k, base in enumerate(sequence[:-1]):
+        #             if base.upper() == "C" and sequence[k+1].upper() == "G":
+        #                 # Annotate the C
+        #                 binfile.seek(position)
+        #                 current = int.from_bytes(binfile.read(1), 'little')
+        #                 new = (current | this_type).to_bytes(1, 'little')
+        #                 binfile.seek(position)
+        #                 binfile.write(new)
+        #                 # Annotate the G
+        #                 binfile.seek(position+1)
+        #                 current = int.from_bytes(binfile.read(1), 'little')
+        #                 new = (current | this_type).to_bytes(1, 'little')
+        #                 binfile.seek(position+1)
+        #                 binfile.write(new)
+        #             position += 1
+        #             if position % 100000 == 0:
+        #                 print(f"{time.asctime()} | Processed {position / 1000000} million base pairs...", end="\r")
+        #         sequence = ""
+        #     else:
+        #         sequence += line.strip("\n")
+
+
         for line in ifile:
+            #print(line)
             if line.startswith(">"):
-                pass
+                last_is_C = False
+
             else:
-                for k, base in enumerate(line.strip("\n")):
-                    if base.upper() == "C" and line[k+1].upper() == "G":
+                # Handle CpG overhanging 2 lines
+                if line[0].upper() == "G" and last_is_C:
+                    # Annotate the C
+                    binfile.seek(position-1)
+                    current = int.from_bytes(binfile.read(1), 'little')
+                    new = (current | this_type).to_bytes(1, 'little')
+                    binfile.seek(position-1)
+                    binfile.write(new)
+                    # Annotate the G
+                    binfile.seek(position)
+                    current = int.from_bytes(binfile.read(1), 'little')
+                    new = (current | this_type).to_bytes(1, 'little')
+                    binfile.seek(position)
+                    binfile.write(new)
+
+                if line[-2]=="C":
+                    last_is_C = True
+                else:
+                    last_is_C = False
+
+                for k, base in enumerate(line[:-1]):
+                    if base.upper() == "C" and line[k + 1].upper() == "G":
                         # Annotate the C
                         binfile.seek(position)
                         current = int.from_bytes(binfile.read(1), 'little')
@@ -314,14 +376,16 @@ if doCpG:
                         binfile.seek(position)
                         binfile.write(new)
                         # Annotate the G
-                        binfile.seek(position+1)
+                        binfile.seek(position + 1)
                         current = int.from_bytes(binfile.read(1), 'little')
                         new = (current | this_type).to_bytes(1, 'little')
-                        binfile.seek(position+1)
+                        binfile.seek(position + 1)
                         binfile.write(new)
                     position += 1
-            if position % 100000 == 0:
-                print(f"{time.asctime()} | Processed {position/1000000} million base pairs...", end="\r")
+
+                    if position % 100000 == 0:
+                        print(f"{time.asctime()} | Processed {position / 1000000} million base pairs...", end="\r")
+
 
 #------------------------------------------------------------------------------#
 # Annotating C/T SNPs from a VCF file
@@ -368,16 +432,16 @@ if doMatrix:
 
         # Read in the first row:
         prev_row = next(mfile).strip("\n").split("\t")
-        sp = prev_row[0].split(":")
-        prev_fullpos = abs_dict[sp[0]] + int(sp[1]) - 1
+        scaf, pos = prev_row[0].split(":")
+        prev_fullpos = abs_dict[scaf] + int(pos) - 1
         prev_count = [float(x) if x != "nan" else float(0) for x in prev_row[1:]]
-
         is_new_cpg = True
+
         # Start iterating over the file:
         for k, line in enumerate(mfile):
             this_row = line.strip("\n").split("\t")
-            sp = this_row[0].split(":")
-            this_fullpos = abs_dict[sp[0]] + int(sp[1]) - 1
+            scaf, pos = this_row[0].split(":")
+            this_fullpos = abs_dict[scaf] + int(pos) - 1
             this_count = [float(x) if x != "nan" else float(0) for x in this_row[1:]]
 
             # if we are on the same scaffold, at 1bp distance:
@@ -394,32 +458,20 @@ if doMatrix:
                 bfile.seek(prev_fullpos)
                 bflag_0 = bfile.read(1)
                 bflag_1 = bfile.read(1)
+                bpos = (prev_fullpos).to_bytes(4, 'little')
                 bflag = (int.from_bytes(bflag_0, 'little') | int.from_bytes(bflag_1, 'little')).to_bytes(1, 'little')
                 s = struct.pack('f'*len(data), *data)
+                ofile.write(bpos)
                 ofile.write(bflag)
                 ofile.write(s)
+
             else:
                 is_new_cpg = True
 
-            prev_row = next(mfile).strip("\n").split("\t")
-            sp = prev_row[0].split(":")
-            prev_fullpos = abs_dict[sp[0]] + int(sp[1]) - 1
-            prev_count = [float(x) if x != "nan" else float(0) for x in prev_row[1:]]
-
-        # for k, line in enumerate(mfile):
-        #     row = line.strip("\n").split("\t")
-        #     spos = row[0].split(":")
-        #     scaf, pos = spos[0], int(spos[1])
-        #     fullpos = abs_dict[scaf] + pos - 1
-        #     data = [float(row[i]) for i in sample_ids]
-        #     bfile.seek(fullpos)
-        #     bflag = bfile.read(1)
-        #     s = struct.pack('f'*len(data), *data)
-        #     ofile.write(bflag)
-        #     ofile.write(s)
+            prev_row, prev_fullpos, prev_count = this_row, this_fullpos, this_count
 
             if k % 2000 == 0:
-                print(f"{time.asctime()} | Processed {k/2} mCpG sites...", end="\r")
+                print(f"{time.asctime()} | Processed {int(k/2)} mCpG sites...", end="\r")
 
 print("\n---------------------------------------------------------------------------------")
 print(f"Completed in {str(datetime.timedelta(seconds=round(time.time() - start_time)))}")
