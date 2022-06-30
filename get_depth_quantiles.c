@@ -108,6 +108,8 @@ int main(int argc, char *argv[]) {
             printf("%f\t%3.1f\n", levels[i], depth[quantile_index]);
         }
     }
-   return(0);
+
+    free(depth);
+    return(0);
 
 }
