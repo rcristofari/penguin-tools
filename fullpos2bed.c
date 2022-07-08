@@ -8,7 +8,7 @@ int main(int argc, char *argv[]) {
     int opt; // options in the argument parser
     FILE *gfile;
     FILE *pfile;
-    int i;
+    int i = 1;
     int chr_size = 0;
     int abs_start = 0;
     char * line = NULL;
@@ -76,9 +76,14 @@ int main(int argc, char *argv[]) {
 
     while ((read = getline(&line, &len, pfile)) != -1) {
         fullpos = atoi(line);
-        i = 0;
+
+        // To avoid re-scanning the list everytime, we restart just ahead of where we left off:
+        i -= 1;
         while (scaffolds[i].abs < fullpos) {
             i++;
+            if (i >= n_scaffolds){
+                break;
+            }
         }
         printf("%s\t%d\t%d\n", scaffolds[i-1].chr, fullpos - scaffolds[i-1].abs, fullpos - scaffolds[i-1].abs);
     }
