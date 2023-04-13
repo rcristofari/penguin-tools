@@ -32,12 +32,22 @@ print("-------------------------------------------------------------------------
 #----------------------------------------------------------------------------------------------------------------------#
 # The exponents used for the bit codes:
 codes = {'cpg':0,
+<<<<<<< Updated upstream
          'cpgi':1,
          'cisreg':2,
          'intron':3,
          'exon_first':4,
          'exon_other':5,
          'ct_snp':6}
+=======
+         'cpgi':1, #2
+         'cisreg':2, #4
+         'intron':3, #8
+         'exon_first':4, #16
+         'exon_other':5, #32
+         'ct_snp':6} #64
+# ADD CpG SHORES AND SHELVES !
+>>>>>>> Stashed changes
 
 #----------------------------------------------------------------------------------------------------------------------#
 if args.ref:
@@ -764,7 +774,12 @@ if doMatrix:
             prev_row, prev_fullpos, prev_count, prev_scaf, prev_pos = this_row, this_fullpos, this_count, this_scaf, this_pos
 
             if k % 2000 == 0:
+<<<<<<< Updated upstream
                 print(f"{time.asctime()} | Processed {int(k)} sites | kept {int(kept*2 + kept_single)} bases | retained {int(kept)} CpG sites and {int(kept_single)} single sites | removed {lowstd} low-variance sites |", end="\r")
+=======
+                retaining_rate = round(((int(kept*2 + kept_single))/int(k))*100, 2) if int(k) > 0 else 0
+                print(f"{time.asctime()} | Processed {int(k)} sites | kept {int(kept*2 + kept_single)} bases | retained {int(kept)} CpG sites and {int(kept_single)} single sites | removed {lowstd} low-variance sites | Retaining rate {retaining_rate}%", end="\r")
+>>>>>>> Stashed changes
 
     if doCalls:
         for f in cfiles:

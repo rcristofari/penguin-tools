@@ -101,15 +101,9 @@ int main(int argc, char *argv[]) {
         printf("Upper %f percentile at depth = %f X\n", upper_quantile*100, depth[quantile_index]);
     }
     if (do_auto == true) {
-<<<<<<< Updated upstream
         float levels[8] = {0.001, 0.01, 0.05, 0.1, 0.9, 0.95, 0.99, 0.999};
         printf("PROB\tDEPTH\n");
         for (i = 0; i < 8; i++){
-=======
-        float levels[9] = {0.001, 0.01, 0.05, 0.1, 0.5, 0.9, 0.95, 0.99, 0.999};
-        printf("PROB\tDEPTH\n");
-        for (i = 0; i < 9; i++){
->>>>>>> Stashed changes
             quantile_index = (int)round(levels[i] * nlines);
             printf("%f\t%3.1f\n", levels[i], depth[quantile_index]);
         }

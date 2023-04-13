@@ -29,11 +29,7 @@ float view_methx(const char *ifile_path, const int n_samples, const int includes
 
     // Check that file was correctly opened
     if (ifile == NULL){
-<<<<<<< Updated upstream
         printf("Could not open the specified file.\nTerminating.\n");
-=======
-        printf("Could not open the specified file.\n");
->>>>>>> Stashed changes
         exit(0);
     }
 
