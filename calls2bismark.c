@@ -19,7 +19,7 @@ int main(int argc, char *argv[]) {
     // Skip the header line
     while (c != '\n') {
       c = fgetc(ifile);
-      printf("%c", c);
+      //printf("%c", c);
     };
 
     // parse and transform the file, print to stdout
