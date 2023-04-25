@@ -19,7 +19,7 @@ print(f"Report file: {path_report}")
 i = 0
 start_time = time.time()
 
-with gzip.open(path_in, 'rt') as ifile, open(path_out, 'w') as ofile, open(path_strands, 'w') as strandfile:
+with (gzip.open if path_in.endswith("gz") else open)(path_in, 'rt') as ifile, open(path_out, 'w') as ofile, open(path_strands, 'w') as strandfile:
 
     prev_data = [None, None, None, None, None, None, None]
     nCpG_plus, nCpG_minus, nCpG_both = 0, 0, 0
@@ -31,13 +31,12 @@ with gzip.open(path_in, 'rt') as ifile, open(path_out, 'w') as ofile, open(path_
 
     for line in ifile:
         this_data = line.strip("\n").split("\t")
-
         try:
             if this_data[0] == prev_data[0] and int(this_data[1]) == int(prev_data[1]) + 1 and this_data[2] == '-' and prev_data[2] == '+':
                 total_C = int(prev_data[3]) + int(this_data[3])
                 total_T = int(prev_data[4]) + int(this_data[4])
                 percent = round( (total_C / (total_C + total_T) ) * 100, 6)
-                ofile.write("\t".join([prev_data[0], str(prev_data[1]), str(prev_data[1]), str(percent), str(total_C), str(total_T)]) + "\n")
+                ofile.write("\t".join([prev_dataq[0], str(prev_data[1]), str(prev_data[1]), str(percent), str(total_C), str(total_T)]) + "\n")
 
                 i += 1
                 if i % 1000 == 0:
