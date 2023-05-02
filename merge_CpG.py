@@ -35,8 +35,9 @@ with (gzip.open if path_in.endswith("gz") else open)(path_in, 'rt') as ifile, op
             if this_data[0] == prev_data[0] and int(this_data[1]) == int(prev_data[1]) + 1 and this_data[2] == '-' and prev_data[2] == '+':
                 total_C = int(prev_data[3]) + int(this_data[3])
                 total_T = int(prev_data[4]) + int(this_data[4])
-                percent = round( (total_C / (total_C + total_T) ) * 100, 6)
-                ofile.write("\t".join([prev_dataq[0], str(prev_data[1]), str(prev_data[1]), str(percent), str(total_C), str(total_T)]) + "\n")
+                if total_C + total_T > 0:
+                    percent = round( (total_C / (total_C + total_T) ) * 100, 6)
+                    ofile.write("\t".join([prev_data[0], str(prev_data[1]), str(prev_data[1]), str(percent), str(total_C), str(total_T)]) + "\n")
 
                 i += 1
                 if i % 1000 == 0:
@@ -68,18 +69,18 @@ with (gzip.open if path_in.endswith("gz") else open)(path_in, 'rt') as ifile, op
 with open(path_report, 'w') as ofile:
     nCpG = [nCpG_plus, nCpG_minus, nCpG_both]
     covCpG = [covCpG_plus, covCpG_minus, covCpG_both]
-    cov = [round(covCpG[i]/nCpG[i],4) for i, x in enumerate(nCpG)]
+    cov = [round(covCpG[i]/nCpG[i], 4) if nCpG[i] > 0 else 0 for i, x in enumerate(nCpG)]
     ofile.write("# Count and mean coverage per CpG site, by strand:\n\n")
     ofile.write("\tplus\tminus\tboth\n")
     ofile.write(f"n_CpG\t{nCpG_plus}\t{nCpG_minus}\t{nCpG_both}\n")
     ofile.write(f"cov\t{cov[0]}\t{cov[1]}\t{cov[2]}\n")
     ofile.write("\n# Strand-specific coverage for CpGs sequenced on both strand:\n\n")
-    ofile.write(f"plus-strand:\t{round(covCpG_plus_in_both/nCpG_both, 2)} X\n")
-    ofile.write(f"minus-strand:\t{round(covCpG_minus_in_both/nCpG_both, 2)} X\n")
+    ofile.write(f"plus-strand:\t{round(covCpG_plus_in_both/nCpG_both if nCpG_both>0 else 0, 2)} X\n")
+    ofile.write(f"minus-strand:\t{round(covCpG_minus_in_both/nCpG_both if nCpG_both>0 else 0, 2)} X\n")
 
-    ofile.write(f"\nAverage variation between strands:\t{round(percent_diff_btw_both/nCpG_both, 2)}\n")
+    ofile.write(f"\nAverage variation between strands:\t{round(percent_diff_btw_both/nCpG_both if nCpG_both>0 else 0, 2)}\n")
 
-    ofile.write(f"\n# {round((nCpG_both / sum(nCpG))*100, 2)}% of all CpG sites are sequenced on both strands")
+    ofile.write(f"\n# {round((nCpG_both / sum(nCpG))*100 if sum(nCpG) > 0 else 0, 2)}% of all CpG sites are sequenced on both strands")
 
 print(f"Completed in {str(datetime.timedelta(seconds=round(time.time() - start_time)))}")
 
